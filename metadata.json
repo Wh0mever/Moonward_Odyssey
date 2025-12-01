@@ -1,0 +1,8 @@
+{
+  "name": "Lunar Survival Sandbox",
+  "description": "Infinite procedural lunar survival game with low gravity physics and hazards.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "prompt": "Create a procedural lunar survival game"
+}
