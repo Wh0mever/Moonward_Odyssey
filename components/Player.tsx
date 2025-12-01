@@ -3,158 +3,263 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import React, { useRef, useEffect } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
-import { Vector3 } from 'three';
+import React, { useRef, useEffect, useState } from 'react';
+import { useFrame, useThree, createPortal } from '@react-three/fiber';
+import { Vector3, Raycaster, Group, Vector2 } from 'three';
 import { PointerLockControls } from '@react-three/drei';
-import { getTerrainHeight, isDangerZone } from '../services/geminiService';
+import { getTerrainHeight } from '../services/geminiService';
 import { PlayerStats } from '../types';
+import { Weapon } from './Weapon';
 
 interface PlayerProps {
+  currentStats: PlayerStats;
   onStatsUpdate: (stats: PlayerStats) => void;
   onDie: (reason: string) => void;
+  onShoot: (targetId: string | null, isHeadshot: boolean, hitPoint: Vector3) => void;
+  onInteract: (targetId?: string) => void;
+  onToggleEquip: () => void;
+  onHover: (isHovering: boolean) => void;
+  isEquipped: boolean;
   isDead: boolean;
   initialPosition?: { x: number, y: number, z: number };
-  currentStats: PlayerStats; // Add this prop
   sensitivity?: number;
+  isTutorial?: boolean;
 }
 
-// Physics Constants - BUFFED SPEED
-const MOVE_ACCEL = 60.0; // Increased acceleration
-const MAX_SPEED = 16.0;  // Increased max speed (approx +30%)
-const FRICTION = 5.0;
+const MOVE_ACCEL = 60.0;
+const MAX_SPEED = 16.0;
+const FRICTION = 5.0; 
 const AIR_RESISTANCE = 0.5;
-const JUMP_FORCE = 12;   // Slightly higher jump to match speed
-const GRAVITY = 4.0;
-const OXYGEN_DEPLETION_RATE = 1.5; // Slightly easier oxygen
-const ACID_LEVEL = -12; // Height of acid liquid
+const JUMP_FORCE = 10.0; 
+const STAMINA_JUMP_COST = 10;
+const STAMINA_REGEN_RATE = 1.0; 
+const GRAVITY = 9.0; 
+const OXYGEN_DEPLETION_RATE = 1.0;
+const ACID_LEVEL = -12;
 
-export const Player: React.FC<PlayerProps> = ({ onStatsUpdate, onDie, isDead, initialPosition, currentStats, sensitivity = 1.0 }) => {
-  const { camera } = useThree();
+export const Player: React.FC<PlayerProps> = ({ 
+    currentStats, onStatsUpdate, onDie, onShoot, onInteract, onToggleEquip, onHover, isEquipped, isDead, initialPosition, sensitivity = 1.0, isTutorial = false
+}) => {
+  const { camera, scene } = useThree();
   const position = useRef(new Vector3(0, 20, 0));
   const velocity = useRef(new Vector3(0, 0, 0));
   const isGrounded = useRef(false);
   const keys = useRef<{ [key: string]: boolean }>({});
-
-  // Initialize from save if available
-  useEffect(() => {
-    if (initialPosition) {
-      position.current.set(initialPosition.x, initialPosition.y + 2, initialPosition.z);
-      camera.position.copy(position.current);
-    }
-  }, [initialPosition, camera]);
-
-  // Initialize stats from props (loading save correctly)
   const stats = useRef<PlayerStats>({ ...currentStats });
+  const [isShooting, setIsShooting] = useState(false);
+  
+  // Laser Target for visual effect
+  const [laserTarget, setLaserTarget] = useState<Vector3 | null>(null);
+  
+  // Recoil State
+  const recoilAccumulator = useRef(0);
+  
+  // Raycaster for interactions and shooting
+  const raycaster = useRef(new Raycaster());
+  
+  // Refs for callbacks to prevent stale closures
+  const onInteractRef = useRef(onInteract);
+  const onShootRef = useRef(onShoot);
+  const onToggleEquipRef = useRef(onToggleEquip);
+  const onHoverRef = useRef(onHover);
+  const onStatsUpdateRef = useRef(onStatsUpdate); // Critical for spawning logic
+  
+  useEffect(() => { onInteractRef.current = onInteract; }, [onInteract]);
+  useEffect(() => { onShootRef.current = onShoot; }, [onShoot]);
+  useEffect(() => { onToggleEquipRef.current = onToggleEquip; }, [onToggleEquip]);
+  useEffect(() => { onHoverRef.current = onHover; }, [onHover]);
+  useEffect(() => { onStatsUpdateRef.current = onStatsUpdate; }, [onStatsUpdate]);
 
-  // Sync stats ref with props to ensure level calculation uses saved data initially
-  // AND to handle external updates (like collecting items)
+  // Sync Stats
   useEffect(() => {
-    // If external stats (from App) have higher values (e.g. gained oxygen/xp), sync local ref
-    if (currentStats.oxygen > stats.current.oxygen) {
-      stats.current.oxygen = currentStats.oxygen;
-    }
-    if (currentStats.xp > stats.current.xp) {
-      stats.current.xp = currentStats.xp;
-    }
-    if (currentStats.level > stats.current.level) {
-      stats.current.level = currentStats.level;
-      stats.current.maxOxygen = currentStats.maxOxygen;
-      stats.current.maxHealth = currentStats.maxHealth;
-    }
-    // Always sync position from physics, so don't overwrite it from props unless it's a teleport (not handled here)
+    stats.current.health = currentStats.health;
+    stats.current.oxygen = currentStats.oxygen;
+    stats.current.xp = currentStats.xp;
+    stats.current.level = currentStats.level;
+    stats.current.maxStamina = currentStats.maxStamina;
+    stats.current.ammo = currentStats.ammo;
+    stats.current.fuel = currentStats.fuel;
+    stats.current.artifacts = currentStats.artifacts;
   }, [currentStats]);
 
-  const lastUpdate = useRef(Date.now());
-
+  // Init Pos
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => (keys.current[e.code] = true);
+    if (initialPosition) {
+        position.current.set(initialPosition.x, initialPosition.y + 2, initialPosition.z);
+        camera.position.copy(position.current);
+        stats.current.position = initialPosition;
+        stats.current.stamina = currentStats.stamina; 
+    }
+  }, []);
+
+  // Controls Listeners
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        if (isDead) return;
+        keys.current[e.code] = true;
+        
+        // INTERACTION (E)
+        if (e.code === 'KeyE') {
+            raycaster.current.setFromCamera(new Vector2(0, 0), camera);
+            const intersects = raycaster.current.intersectObjects(scene.children, true);
+            const hit = intersects.find(i => i.object.userData.interactable && i.distance < 4.0);
+            
+            if (hit) {
+                onInteractRef.current(hit.object.userData.id);
+            } else {
+                onInteractRef.current(undefined);
+            }
+        }
+
+        // TOGGLE WEAPON (1)
+        if (e.code === 'Digit1') {
+            onToggleEquipRef.current();
+        }
+    };
     const handleKeyUp = (e: KeyboardEvent) => (keys.current[e.code] = false);
+    
+    const handleMouseDown = () => {
+        if (!isDead && isEquipped && stats.current.ammo > 0) {
+            setIsShooting(true);
+            setTimeout(() => setIsShooting(false), 100);
+            
+            // RAYCAST SHOOTING LOGIC
+            const dir = new Vector3();
+            camera.getWorldDirection(dir);
+            // Accuracy Spread
+            const spread = isGrounded.current ? 0.005 : 0.15; 
+            dir.x += (Math.random() - 0.5) * spread;
+            dir.y += (Math.random() - 0.5) * spread;
+            dir.z += (Math.random() - 0.5) * spread;
+            dir.normalize();
+
+            raycaster.current.set(camera.position, dir);
+            
+            // Only intersect things that matter (Enemies, Terrain)
+            const intersects = raycaster.current.intersectObjects(scene.children, true);
+            
+            let hitTargetId: string | null = null;
+            let isHeadshot = false;
+            let hitPoint = new Vector3().copy(camera.position).add(dir.multiplyScalar(100)); // Default max range
+
+            // Find first valid hit
+            for (let i = 0; i < intersects.length; i++) {
+                const hit = intersects[i];
+                if (hit.object.userData.type === 'ENEMY') {
+                    hitTargetId = hit.object.userData.id;
+                    isHeadshot = hit.object.userData.part === 'HEAD';
+                    hitPoint = hit.point;
+                    break;
+                } else if (!hit.object.userData.ignoreRaycast) { // Stop at terrain
+                    hitPoint = hit.point;
+                    break;
+                }
+            }
+
+            onShootRef.current(hitTargetId, isHeadshot, hitPoint);
+            setLaserTarget(hitPoint);
+            setTimeout(() => setLaserTarget(null), 100);
+
+            // Recoil
+            const kick = 0.02 * sensitivity; 
+            recoilAccumulator.current += kick;
+            camera.rotation.x += kick; 
+        }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('mousedown', handleMouseDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('mousedown', handleMouseDown);
     };
-  }, []);
+  }, [isDead, camera, scene, isEquipped, sensitivity]);
+
+  const lastUpdate = useRef(Date.now());
 
   useFrame((state, delta) => {
     if (isDead) return;
 
+    // Hover Interaction Check
+    if (state.clock.elapsedTime % 0.1 < 0.02) { // Throttle check
+        raycaster.current.setFromCamera(new Vector2(0, 0), camera);
+        const intersects = raycaster.current.intersectObjects(scene.children, true);
+        const hit = intersects.find(i => i.object.userData.interactable && i.distance < 4.0);
+        onHoverRef.current(!!hit);
+    }
+
     const time = Date.now();
     const dt = Math.min(delta, 0.1);
 
-    // --- Stats Logic ---
+    // RECOIL RECOVERY
+    if (recoilAccumulator.current > 0) {
+        const recoverySpeed = 5.0; 
+        const recoveryAmount = recoilAccumulator.current * recoverySpeed * dt;
+        recoilAccumulator.current = Math.max(0, recoilAccumulator.current - recoveryAmount);
+        camera.rotation.x -= recoveryAmount;
+    }
+
+    // Stats Drain & Regen
     if (time - lastUpdate.current > 1000) {
-      stats.current.oxygen -= OXYGEN_DEPLETION_RATE;
-
-      // Level Up Logic
-      const xpNeeded = stats.current.level * 500;
-      if (stats.current.xp >= xpNeeded) {
-        stats.current.level++;
-        stats.current.xp -= xpNeeded;
-        stats.current.maxOxygen += 10;
-        stats.current.health = Math.min(stats.current.health + 20, stats.current.maxHealth);
-        stats.current.oxygen = stats.current.maxOxygen;
+      if (!isTutorial) {
+        stats.current.oxygen -= OXYGEN_DEPLETION_RATE;
+        if (stats.current.oxygen <= 0) onDie("Asphyxiation");
+      }
+      
+      if (stats.current.stamina < stats.current.maxStamina) {
+          stats.current.stamina = Math.min(stats.current.maxStamina, stats.current.stamina + STAMINA_REGEN_RATE);
       }
 
-      // Death Checks
-      if (stats.current.oxygen <= 0) {
-        onDie("Asphyxiation (Oxygen Depleted)");
-      }
-
-      onStatsUpdate({ ...stats.current });
+      // USE REF HERE to use the FRESH closure from App.tsx
+      onStatsUpdateRef.current({ ...stats.current, position: { ...position.current } });
       lastUpdate.current = time;
     }
 
-    // --- Physics & Movement ---
-    const frontVector = new Vector3(
-      0,
-      0,
-      Number(keys.current['KeyS'] || 0) - Number(keys.current['KeyW'] || 0)
-    );
-    const sideVector = new Vector3(
-      Number(keys.current['KeyA'] || 0) - Number(keys.current['KeyD'] || 0),
-      0,
-      0
-    );
+    // Movement Physics
+    const frontVector = new Vector3(0, 0, Number(keys.current['KeyS'] || 0) - Number(keys.current['KeyW'] || 0));
+    const sideVector = new Vector3(Number(keys.current['KeyA'] || 0) - Number(keys.current['KeyD'] || 0), 0, 0);
     const direction = new Vector3().subVectors(frontVector, sideVector).normalize();
 
     const camDir = new Vector3();
     camera.getWorldDirection(camDir);
     camDir.y = 0;
     camDir.normalize();
-    const camRight = new Vector3().crossVectors(camera.up, camDir).normalize();
-
+    const camRight = new Vector3().crossVectors(camera.up, camDir).normalize(); 
+    
     const moveForce = new Vector3()
-      .addScaledVector(camRight, sideVector.x)
-      .addScaledVector(camDir, -frontVector.z)
-      .normalize();
+        .addScaledVector(camRight, sideVector.x)
+        .addScaledVector(camDir, -frontVector.z)
+        .normalize();
 
     if (isGrounded.current) {
-      velocity.current.x += moveForce.x * MOVE_ACCEL * dt;
-      velocity.current.z += moveForce.z * MOVE_ACCEL * dt;
+        velocity.current.x += moveForce.x * MOVE_ACCEL * dt;
+        velocity.current.z += moveForce.z * MOVE_ACCEL * dt;
+        
+        const hSpeed = Math.sqrt(velocity.current.x**2 + velocity.current.z**2);
+        if (hSpeed > MAX_SPEED) {
+             const ratio = MAX_SPEED / hSpeed;
+             velocity.current.x *= ratio;
+             velocity.current.z *= ratio;
+        }
 
-      // Cap horizontal speed
-      const hSpeed = Math.sqrt(velocity.current.x ** 2 + velocity.current.z ** 2);
-      if (hSpeed > MAX_SPEED) {
-        const ratio = MAX_SPEED / hSpeed;
-        velocity.current.x *= ratio;
-        velocity.current.z *= ratio;
-      }
+        velocity.current.x -= velocity.current.x * FRICTION * dt;
+        velocity.current.z -= velocity.current.z * FRICTION * dt;
 
-      velocity.current.x -= velocity.current.x * FRICTION * dt;
-      velocity.current.z -= velocity.current.z * FRICTION * dt;
-
-      if (keys.current['Space']) {
-        velocity.current.y = JUMP_FORCE;
-        isGrounded.current = false;
-      }
+        if (keys.current['Space']) {
+            if (stats.current.stamina >= STAMINA_JUMP_COST) {
+                velocity.current.y = JUMP_FORCE;
+                stats.current.stamina -= STAMINA_JUMP_COST;
+                isGrounded.current = false;
+                onStatsUpdateRef.current({ ...stats.current, position: { ...position.current } });
+            }
+        }
     } else {
-      velocity.current.x += moveForce.x * (MOVE_ACCEL * 0.2) * dt;
-      velocity.current.z += moveForce.z * (MOVE_ACCEL * 0.2) * dt;
-      velocity.current.x -= velocity.current.x * AIR_RESISTANCE * dt;
-      velocity.current.z -= velocity.current.z * AIR_RESISTANCE * dt;
+        velocity.current.x += moveForce.x * (MOVE_ACCEL * 0.2) * dt;
+        velocity.current.z += moveForce.z * (MOVE_ACCEL * 0.2) * dt;
+        velocity.current.x -= velocity.current.x * AIR_RESISTANCE * dt;
+        velocity.current.z -= velocity.current.z * AIR_RESISTANCE * dt;
     }
 
     velocity.current.y -= GRAVITY * dt;
@@ -163,23 +268,15 @@ export const Player: React.FC<PlayerProps> = ({ onStatsUpdate, onDie, isDead, in
     position.current.z += velocity.current.z * dt;
     position.current.y += velocity.current.y * dt;
 
-    // --- Collision ---
-    const terrainHeight = getTerrainHeight(position.current.x, position.current.z);
-    const playerHeight = 1.8;
-
-    // Acid Pit Check
-    if (position.current.y < ACID_LEVEL + 1) { // Tolerance
-      onDie("Dissolved in Acid Pool");
-      return;
+    // Collision
+    if (!isTutorial && position.current.y < ACID_LEVEL + 1) { 
+         onDie("Dissolved in Acid Pool");
+         return;
     }
 
-    // Void Check (Backup)
-    if (isDangerZone(terrainHeight, position.current.x, position.current.z)) {
-      if (position.current.y < terrainHeight - 15) {
-        onDie("Fell into the Void");
-        return;
-      }
-    }
+    // Determine Ground Height (Flat 0 for tutorial, noise for game)
+    const terrainHeight = isTutorial ? 0 : getTerrainHeight(position.current.x, position.current.z);
+    const playerHeight = 1.8; 
 
     if (position.current.y < terrainHeight + playerHeight) {
       position.current.y = terrainHeight + playerHeight;
@@ -189,34 +286,35 @@ export const Player: React.FC<PlayerProps> = ({ onStatsUpdate, onDie, isDead, in
       isGrounded.current = false;
     }
 
+    // Apply physics to camera
     camera.position.copy(position.current);
-
-    // Update internal ref so stats update works correctly
-    stats.current.position = { x: position.current.x, y: position.current.y, z: position.current.z };
   });
-
-  /* 
-     PointerLockControls doesn't inherently expose "sensitivity" cleanly via props in standard drei without custom implementation 
-     or editing the camera property in useFrame. However, we can approximate user intent by adjusting moving speed
-     or letting standard browser pointer speed handle it. 
-     For a true sensitivity slider, we'd wrap the camera rotation logic manually, but for this demo, 
-     we will just pass the prop to placeholder.
-  */
 
   return (
     <>
-      <PointerLockControls />
-      <group position={camera.position} rotation={camera.rotation}>
-        <spotLight
-          position={[0.2, -0.2, 0]}
-          intensity={3}
-          angle={0.6}
-          penumbra={0.5}
-          distance={60}
-          color="#ffffdd"
-          castShadow
-        />
-      </group>
+        {!isDead && (
+            <>
+                <PointerLockControls />
+                {createPortal(
+                    <group>
+                        {/* Handheld Weapon - Adjusted Position for FPS View */}
+                        <Weapon isShooting={isShooting} isEquipped={isEquipped} laserTarget={laserTarget} />
+                        
+                        {/* Flashlight */}
+                        <spotLight 
+                            position={[0.2, -0.2, 0]} 
+                            intensity={3} 
+                            angle={0.6} 
+                            penumbra={0.5} 
+                            distance={60} 
+                            color="#ffffdd"
+                            castShadow
+                        />
+                    </group>,
+                    camera
+                )}
+            </>
+        )}
     </>
   );
 };

@@ -21,46 +21,46 @@ const Chunk: React.FC<ChunkProps> = React.memo(({ x, z }) => {
   const geometry = useMemo(() => {
     const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_RES, CHUNK_RES);
     const posAttribute = geo.attributes.position;
-
+    
     // Displace vertices
     for (let i = 0; i < posAttribute.count; i++) {
       const localX = posAttribute.getX(i);
-      const localY = posAttribute.getY(i);
-
+      const localY = posAttribute.getY(i); 
+      
       const worldX = x + localX;
-      const worldZ = z - localY;
-
+      const worldZ = z - localY; 
+      
       const height = getTerrainHeight(worldX, worldZ);
-      posAttribute.setZ(i, height);
+      posAttribute.setZ(i, height); 
     }
-
+    
     geo.computeVertexNormals();
     return geo;
   }, [x, z]);
 
   return (
     <group>
-      <mesh
-        ref={meshRef}
-        position={[x, 0, z]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        receiveShadow
+        <mesh 
+        ref={meshRef} 
+        position={[x, 0, z]} 
+        rotation={[-Math.PI / 2, 0, 0]} 
+        receiveShadow 
         castShadow
-      >
+        >
         <primitive object={geometry} attach="geometry" />
-        <meshStandardMaterial
-          color="#555555"
-          roughness={0.9}
-          metalness={0.1}
-          flatShading={true}
+        <meshStandardMaterial 
+            color="#555555" 
+            roughness={0.9} 
+            metalness={0.1} 
+            flatShading={true}
         />
-      </mesh>
-
-      {/* Acid Plane for this chunk */}
-      <mesh position={[x, ACID_LEVEL, z]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[CHUNK_SIZE, CHUNK_SIZE]} />
-        <meshBasicMaterial color="#00ff00" transparent opacity={0.6} side={THREE.DoubleSide} />
-      </mesh>
+        </mesh>
+        
+        {/* Acid Plane for this chunk */}
+        <mesh position={[x, ACID_LEVEL, z]} rotation={[-Math.PI / 2, 0, 0]}>
+            <planeGeometry args={[CHUNK_SIZE, CHUNK_SIZE]} />
+            <meshBasicMaterial color="#00ff00" transparent opacity={0.6} side={THREE.DoubleSide} />
+        </mesh>
     </group>
   );
 });
@@ -75,8 +75,8 @@ export const TerrainManager: React.FC<TerrainManagerProps> = ({ playerPosition }
   const currentChunkZ = Math.round(playerPosition.z / CHUNK_SIZE) * CHUNK_SIZE;
 
   const chunks = [];
-  const range = 3; // Increased range for better visibility 
-
+  const range = 2; 
+  
   for (let xOffset = -range; xOffset <= range; xOffset++) {
     for (let zOffset = -range; zOffset <= range; zOffset++) {
       chunks.push({

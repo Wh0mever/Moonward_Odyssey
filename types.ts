@@ -1,22 +1,13 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
 
-// Augment the JSX namespace to include React Three Fiber elements
-import { ThreeElements } from '@react-three/fiber';
-
-declare global {
-  namespace JSX {
-    interface IntrinsicElements extends ThreeElements { }
-  }
-}
-
 export enum GameState {
   MENU,
   PLAYING,
   DEAD,
+  TUTORIAL
 }
 
 export enum Difficulty {
@@ -30,6 +21,7 @@ export interface GameSettings {
   difficulty: Difficulty;
   sensitivity: number; // 0.1 to 2.0
   sound: boolean;
+  brightness: number; // 0.05 to 1.0
 }
 
 export interface PlayerStats {
@@ -37,9 +29,19 @@ export interface PlayerStats {
   maxHealth: number;
   oxygen: number;
   maxOxygen: number;
+  stamina: number;
+  maxStamina: number;
   xp: number;
   level: number;
+  ammo: number;
+  fuel: number;
+  artifacts: number;
   position: { x: number; y: number; z: number };
+}
+
+export enum MeteorState {
+  TARGETING,
+  FALLING
 }
 
 export interface Meteor {
@@ -47,14 +49,17 @@ export interface Meteor {
   position: [number, number, number];
   velocity: [number, number, number];
   radius: number;
-  warningTime: number; // When the warning starts
-  impactTime: number;  // When the meteor starts falling
-  isFalling: boolean;
+  state: MeteorState;
+  impactTime: number; 
+  targetPos: {x: number, z: number};
 }
 
 export enum CollectibleType {
   OXYGEN = 'OXYGEN',
-  XP = 'XP'
+  XP = 'XP',
+  AMMO = 'AMMO',
+  FUEL = 'FUEL',
+  ARTIFACT = 'ARTIFACT'
 }
 
 export interface Collectible {
@@ -62,11 +67,12 @@ export interface Collectible {
   type: CollectibleType;
   position: [number, number, number];
   value: number;
+  artifactId?: number; // 0-3 for the 4 logos
 }
 
 export enum EnemyType {
   ZOMBIE = 'ZOMBIE',
-  CRAWLER = 'CRAWLER' // Future type
+  SPIDER = 'SPIDER'
 }
 
 export interface Enemy {

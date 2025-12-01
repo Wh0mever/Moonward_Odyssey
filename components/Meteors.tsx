@@ -6,7 +6,8 @@
 import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Meteor } from '../types';
+import { Meteor, MeteorState } from '../types';
+import { getTerrainHeight } from '../services/geminiService';
 
 interface MeteorSystemProps {
   playerPos: { x: number, y: number, z: number };
@@ -17,15 +18,31 @@ interface MeteorSystemProps {
 
 export const MeteorSystem: React.FC<MeteorSystemProps> = ({ playerPos, onMeteorHit, onRegisterMeteors, difficultyLevel }) => {
   const meteors = useRef<Meteor[]>([]);
+  
+  // Mesh for the physical falling meteor
   const meshRef = useRef<THREE.InstancedMesh>(null);
-  const lastSpawn = useRef(0);
+  
+  // Mesh for the warning marker on the ground
+  const warningRef = useRef<THREE.InstancedMesh>(null);
 
+  const lastSpawn = useRef(0);
+  
+  // Meteor Visuals
   const geometry = useMemo(() => new THREE.DodecahedronGeometry(1, 0), []);
-  const material = useMemo(() => new THREE.MeshStandardMaterial({
-    color: '#ff4400',
+  const material = useMemo(() => new THREE.MeshStandardMaterial({ 
+    color: '#ff4400', 
     emissive: '#aa2200',
     emissiveIntensity: 2,
     roughness: 0.4
+  }), []);
+  
+  // Warning Visuals
+  const warningGeo = useMemo(() => new THREE.RingGeometry(0.1, 1, 32), []);
+  const warningMat = useMemo(() => new THREE.MeshBasicMaterial({ 
+      color: '#ff0000', 
+      transparent: true, 
+      opacity: 0.5, 
+      side: THREE.DoubleSide 
   }), []);
 
   const dummy = useMemo(() => new THREE.Object3D(), []);
@@ -34,102 +51,121 @@ export const MeteorSystem: React.FC<MeteorSystemProps> = ({ playerPos, onMeteorH
     const time = state.clock.getElapsedTime();
     const now = Date.now();
 
-    // Spawn Logic - Increased frequency
-    // Base 2000ms, reduces by 100ms per level, min 200ms
-    const spawnRate = Math.max(200, 2000 - (difficultyLevel * 100));
-
+    // Spawn Logic
+    // High difficulty = fast spawns. Low difficulty = slow spawns.
+    const spawnRate = Math.max(1000, 5000 - (difficultyLevel * 800)); 
+    
     if (now - lastSpawn.current > spawnRate) {
       const angle = Math.random() * Math.PI * 2;
-      const dist = 5 + Math.random() * 25; // Closer range (5-30m)
+      const dist = 5 + Math.random() * (40 - difficultyLevel * 2); // Closer on hard difficulty
       const spawnX = playerPos.x + Math.cos(angle) * dist;
       const spawnZ = playerPos.z + Math.sin(angle) * dist;
-
-      // Difficulty Scaling
-      // Warning time: 3s (Easy) -> 1s (Severe)
-      // Size: Small (Easy) -> Large (Severe)
-      const warningDuration = Math.max(1000, 3000 - (difficultyLevel * 200));
-      const sizeMultiplier = 0.5 + Math.min(2.5, difficultyLevel * 0.2);
+      
+      // Calculate delay based on difficulty
+      // Easy: 8s delay. Severe: 3s delay.
+      const warningDelay = Math.max(3000, 10000 - (difficultyLevel * 1500)); 
+      
+      const terrainH = getTerrainHeight(spawnX, spawnZ);
 
       meteors.current.push({
         id: Math.random().toString(),
-        position: [spawnX, playerPos.y + 60, spawnZ],
-        velocity: [
-          (Math.random() - 0.5) * 5,
-          -20 - (Math.random() * 15), // Faster falling
-          (Math.random() - 0.5) * 5
-        ],
-        radius: (0.5 + Math.random() * 1.5) * sizeMultiplier,
-        warningTime: now,
-        impactTime: now + warningDuration,
-        isFalling: false
+        position: [spawnX, terrainH + 100, spawnZ], // Start high up
+        targetPos: {x: spawnX, z: spawnZ},
+        velocity: [0, -40, 0], // Fast drop
+        radius: 2 + (difficultyLevel * 0.5), // Bigger on hard difficulty
+        state: MeteorState.TARGETING,
+        impactTime: now + warningDelay
       });
       lastSpawn.current = now;
     }
 
-    // Update Meteors
+    // Process Meteors
     for (let i = meteors.current.length - 1; i >= 0; i--) {
       const m = meteors.current[i];
-      const dt = 0.016;
+      
+      // PHASE 1: TARGETING
+      if (m.state === MeteorState.TARGETING) {
+          if (now >= m.impactTime) {
+              m.state = MeteorState.FALLING;
+              // Check immediate damage if player is standing on marker when it spawns
+              const dx = m.targetPos.x - playerPos.x;
+              const dz = m.targetPos.z - playerPos.z;
+              if (Math.sqrt(dx*dx + dz*dz) < m.radius) {
+                   onMeteorHit();
+              }
+          }
+      } 
+      // PHASE 2: FALLING
+      else if (m.state === MeteorState.FALLING) {
+          const dt = 0.016; 
+          m.position[1] += m.velocity[1] * dt;
 
-      // Check if warning phase is over
-      if (!m.isFalling) {
-        if (now >= m.impactTime) {
-          m.isFalling = true;
-        } else {
-          // Still in warning phase, don't move
-          continue;
-        }
-      }
-
-      // Falling Physics
-      m.position[0] += m.velocity[0] * dt;
-      m.position[1] += m.velocity[1] * dt;
-      m.position[2] += m.velocity[2] * dt;
-
-      if (m.position[1] < -15) {
-        meteors.current.splice(i, 1);
-        continue;
-      }
-
-      const dx = m.position[0] - playerPos.x;
-      const dy = m.position[1] - playerPos.y;
-      const dz = m.position[2] - playerPos.z;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-      if (dist < m.radius + 2) {
-        onMeteorHit();
+          const terrainH = getTerrainHeight(m.position[0], m.position[2]);
+          
+          // Impact Check
+          if (m.position[1] < terrainH) {
+              // Explosion/Damage check
+              const dx = m.position[0] - playerPos.x;
+              const dz = m.position[2] - playerPos.z;
+              if (Math.sqrt(dx*dx + dz*dz) < m.radius * 2) { // Splash damage radius
+                   onMeteorHit();
+              }
+              meteors.current.splice(i, 1);
+              continue;
+          }
       }
     }
 
-    if (meshRef.current) {
-      if (meteors.current.length > 80) meteors.current.shift();
+    if (meteors.current.length > 50) meteors.current.shift();
+    onRegisterMeteors(meteors.current); 
 
-      onRegisterMeteors(meteors.current);
+    // Update Instanced Meshes
+    if (meshRef.current && warningRef.current) {
+        
+        let fallingCount = 0;
+        let targetingCount = 0;
 
-      // Only render FALLING meteors in the 3D world (warnings are on HUD)
-      // Or we could render a transparent "ghost" or target marker in 3D too?
-      // For now, let's just render falling ones to keep it clean, or maybe render them high up?
-      // Actually, let's render them high up if they are not falling yet, so they "appear" when they start falling
-      // OR we can just hide them by scaling to 0 if !isFalling
+        meteors.current.forEach((m) => {
+            if (m.state === MeteorState.FALLING) fallingCount++;
+            else targetingCount++;
+        });
 
-      meshRef.current.count = meteors.current.length;
-      meteors.current.forEach((meteor, i) => {
-        if (!meteor.isFalling) {
-          dummy.scale.set(0, 0, 0); // Hide until falling
-        } else {
-          dummy.position.set(meteor.position[0], meteor.position[1], meteor.position[2]);
-          dummy.scale.set(meteor.radius, meteor.radius, meteor.radius);
-          dummy.rotation.x = time * 4 + i;
-          dummy.rotation.y = time * 4 + i;
-        }
-        dummy.updateMatrix();
-        meshRef.current!.setMatrixAt(i, dummy.matrix);
-      });
-      meshRef.current.instanceMatrix.needsUpdate = true;
+        meshRef.current.count = fallingCount;
+        warningRef.current.count = targetingCount;
+
+        let fIdx = 0;
+        let tIdx = 0;
+
+        meteors.current.forEach((m) => {
+            if (m.state === MeteorState.FALLING) {
+                dummy.position.set(m.position[0], m.position[1], m.position[2]);
+                dummy.scale.set(m.radius, m.radius, m.radius);
+                dummy.rotation.set(time, time, time);
+                dummy.updateMatrix();
+                meshRef.current!.setMatrixAt(fIdx++, dummy.matrix);
+            } else {
+                // Draw Warning Ring on Ground
+                const terrainH = getTerrainHeight(m.targetPos.x, m.targetPos.z);
+                dummy.position.set(m.targetPos.x, terrainH + 0.2, m.targetPos.z);
+                // Scale ring based on time remaining (pulse effect)
+                const timeLeft = Math.max(0, m.impactTime - now);
+                const pulse = 1 + (Math.sin(time * 10) * 0.1);
+                dummy.scale.set(m.radius * pulse, m.radius * pulse, 1); 
+                dummy.rotation.set(-Math.PI / 2, 0, 0); // Flat on ground
+                dummy.updateMatrix();
+                warningRef.current!.setMatrixAt(tIdx++, dummy.matrix);
+            }
+        });
+
+        meshRef.current.instanceMatrix.needsUpdate = true;
+        warningRef.current.instanceMatrix.needsUpdate = true;
     }
   });
 
   return (
-    <instancedMesh ref={meshRef} args={[geometry, material, 100]} castShadow />
+    <group>
+        <instancedMesh ref={meshRef} args={[geometry, material, 50]} castShadow />
+        <instancedMesh ref={warningRef} args={[warningGeo, warningMat, 50]} />
+    </group>
   );
 };
