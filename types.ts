@@ -9,7 +9,9 @@ export enum GameState {
   PAUSED,
   DEAD,
   TUTORIAL,
-  VICTORY
+  VICTORY,
+  MULTIPLAYER_LOBBY,
+  MULTIPLAYER_PLAYING
 }
 
 export enum Difficulty {

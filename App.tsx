@@ -24,6 +24,9 @@ import { DamageFeedback } from './components/DamageFeedback';
 import { Tutorial } from './components/Tutorial';
 import { PauseMenu } from './components/PauseMenu';
 import { VictoryScreen } from './components/VictoryScreen';
+import { MultiplayerLobby } from './components/MultiplayerLobby';
+import { OtherPlayers } from './components/OtherPlayers';
+import { multiplayerService } from './services/multiplayerService';
 import { generateId } from './utils/generateId';
 
 const INITIAL_STATS: PlayerStats = {
@@ -505,7 +508,25 @@ const App: React.FC = () => {
   return (
     <div className="w-screen h-screen bg-black relative">
       {gameState === GameState.MENU && (
-        <MainMenu onStart={handleStartGame} initialSettings={settings} />
+        <MainMenu
+          onStart={handleStartGame}
+          initialSettings={settings}
+          onMultiplayer={() => setGameState(GameState.MULTIPLAYER_LOBBY)}
+        />
+      )}
+
+      {/* MULTIPLAYER LOBBY */}
+      {gameState === GameState.MULTIPLAYER_LOBBY && (
+        <MultiplayerLobby
+          onBack={() => setGameState(GameState.MENU)}
+          onGameStart={() => {
+            // Start multiplayer game
+            setGameState(GameState.MULTIPLAYER_PLAYING);
+            spawnInitialArtifacts();
+            setGameStartTime(Date.now());
+          }}
+          serverUrl="http://localhost:4001"
+        />
       )}
 
       {isGenerating && (

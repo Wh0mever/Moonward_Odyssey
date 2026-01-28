@@ -4,16 +4,17 @@
  */
 import React, { useState, useEffect, useRef } from 'react';
 import { Difficulty, GameSettings } from '../types';
-import { Play, Settings, XCircle, ChevronLeft, Volume2, VolumeX, MousePointer2, Sun, GraduationCap } from 'lucide-react';
+import { Play, Settings, XCircle, ChevronLeft, Volume2, VolumeX, MousePointer2, Sun, GraduationCap, Users } from 'lucide-react';
 
 interface MainMenuProps {
   onStart: (settings: GameSettings, isTutorial?: boolean) => void;
   initialSettings: GameSettings;
+  onMultiplayer?: () => void;
 }
 
 type MenuState = 'MAIN' | 'DIFFICULTY' | 'SETTINGS';
 
-export const MainMenu: React.FC<MainMenuProps> = ({ onStart, initialSettings }) => {
+export const MainMenu: React.FC<MainMenuProps> = ({ onStart, initialSettings, onMultiplayer }) => {
   const [menuState, setMenuState] = useState<MenuState>('MAIN');
   const [settings, setSettings] = useState<GameSettings>(initialSettings);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -259,6 +260,21 @@ export const MainMenu: React.FC<MainMenuProps> = ({ onStart, initialSettings }) 
                 <div className="text-xs text-gray-400 group-hover:text-green-200">Learn controls & combat</div>
               </div>
             </button>
+
+            {onMultiplayer && (
+              <button
+                onClick={onMultiplayer}
+                className="group relative px-6 py-4 bg-white/5 hover:bg-purple-500/20 border border-white/10 hover:border-purple-500/50 rounded-xl transition-all duration-300 flex items-center gap-4"
+              >
+                <div className="p-2 bg-purple-500/20 rounded-lg group-hover:bg-purple-500 text-purple-400 group-hover:text-white transition-colors">
+                  <Users size={24} />
+                </div>
+                <div className="text-left">
+                  <div className="font-bold text-lg">MULTIPLAYER</div>
+                  <div className="text-xs text-gray-400 group-hover:text-purple-200">Play with friends online</div>
+                </div>
+              </button>
+            )}
 
             <button
               onClick={() => setMenuState('SETTINGS')}
