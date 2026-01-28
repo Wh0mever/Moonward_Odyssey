@@ -587,6 +587,39 @@ io.on('connection', (socket: Socket) => {
         }
     });
 
+    // Player died - game over for everyone
+    socket.on('playerDied', () => {
+        const lobbyId = socketToLobby.get(socket.id);
+        if (!lobbyId) return;
+
+        const lobby = lobbies.get(lobbyId);
+        if (!lobby) return;
+
+        const player = lobby.players.get(socket.id);
+        const killedPlayerName = player?.username || 'Unknown';
+
+        log('GAME', `GAME OVER! ${killedPlayerName} died in lobby ${lobbyId}`);
+
+        // Notify all players in lobby
+        io.to(lobbyId).emit('gameOver', {
+            reason: 'player_died',
+            killedPlayer: killedPlayerName
+        });
+
+        // Clean up lobby
+        lobby.players.forEach((_, playerId) => {
+            socketToLobby.delete(playerId);
+            const playerSocket = io.sockets.sockets.get(playerId);
+            if (playerSocket) {
+                playerSocket.leave(lobbyId);
+            }
+        });
+
+        lobbies.delete(lobbyId);
+        log('LOBBY', `${lobby.name} closed - game over`);
+        io.emit('lobbyListUpdated');
+    });
+
     // Leave lobby
     socket.on('leaveLobby', () => {
         log('LOBBY', `${socket.id} leaving lobby`);

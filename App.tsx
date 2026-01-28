@@ -431,6 +431,12 @@ const App: React.FC = () => {
 
   const handleDie = (reason: string) => {
     if (gameState !== GameState.DEAD) {
+      // In multiplayer, notify server that we died
+      if (gameState === GameState.MULTIPLAYER_PLAYING) {
+        multiplayerService.notifyPlayerDied();
+        return; // Server will handle the game over for everyone
+      }
+
       setGameState(GameState.DEAD);
       setDeathReason(reason);
       clearSave();
@@ -516,11 +522,24 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* MULTIPLAYER LOBBY */}
       {gameState === GameState.MULTIPLAYER_LOBBY && (
         <MultiplayerLobby
           onBack={() => setGameState(GameState.MENU)}
           onGameStart={() => {
+            // Subscribe to game over event for multiplayer
+            const unsubGameOver = multiplayerService.onGameOver((reason, killedPlayer) => {
+              console.log(`[App] Game over! ${killedPlayer} died. Reason: ${reason}`);
+              soundService.playPlayerDeath();
+              // Return to multiplayer lobby
+              setGameState(GameState.MULTIPLAYER_LOBBY);
+              // Reset game state
+              setStats(INITIAL_STATS);
+              setCollectibles([]);
+              setEnemies([]);
+              enemiesRef.current = [];
+              setGameKey(prev => prev + 1);
+            });
+
             // Start multiplayer game
             setGameState(GameState.MULTIPLAYER_PLAYING);
             spawnInitialArtifacts();

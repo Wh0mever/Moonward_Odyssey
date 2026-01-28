@@ -74,6 +74,7 @@ class MultiplayerService {
     private enemyDiedCallbacks: ItemCallback[] = [];
     private gameStartCallbacks: (() => void)[] = [];
     private gameLoadingCallbacks: (() => void)[] = [];
+    private gameOverCallbacks: ((reason: string, killedPlayer: string) => void)[] = [];
 
     setServerUrl(url: string) {
         this.serverUrl = url;
@@ -244,6 +245,16 @@ class MultiplayerService {
         this.socket.on('enemyDied', (enemyId: string) => {
             this.enemyDiedCallbacks.forEach(cb => cb(enemyId));
         });
+
+        this.socket.on('gameOver', (data: { reason: string; killedPlayer: string }) => {
+            console.log('[MP Client] >>> gameOver event received!', data);
+            this.lobbyState.gameState = 'idle';
+            this.lobbyState.lobbyId = null;
+            this.lobbyState.lobbyName = null;
+            this.lobbyState.players = [];
+            this.notifyLobbyChange();
+            this.gameOverCallbacks.forEach(cb => cb(data.reason, data.killedPlayer));
+        });
     }
 
     disconnect() {
@@ -413,6 +424,12 @@ class MultiplayerService {
         this.socket?.emit('enemyKilled', enemyId);
     }
 
+    notifyPlayerDied() {
+        if (!this.socket || !this.lobbyState.lobbyId) return;
+        console.log('[MP Client] Notifying server: player died');
+        this.socket.emit('playerDied');
+    }
+
     leaveLobby() {
         this.socket?.emit('leaveLobby');
         this.lobbyState.lobbyId = null;
@@ -492,6 +509,13 @@ class MultiplayerService {
         this.gameLoadingCallbacks.push(callback);
         return () => {
             this.gameLoadingCallbacks = this.gameLoadingCallbacks.filter(cb => cb !== callback);
+        };
+    }
+
+    onGameOver(callback: (reason: string, killedPlayer: string) => void) {
+        this.gameOverCallbacks.push(callback);
+        return () => {
+            this.gameOverCallbacks = this.gameOverCallbacks.filter(cb => cb !== callback);
         };
     }
 
