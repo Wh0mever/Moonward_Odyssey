@@ -26,6 +26,7 @@ import { PauseMenu } from './components/PauseMenu';
 import { VictoryScreen } from './components/VictoryScreen';
 import { MultiplayerLobby } from './components/MultiplayerLobby';
 import { OtherPlayers } from './components/OtherPlayers';
+import { PingIndicator } from './components/PingIndicator';
 import { multiplayerService } from './services/multiplayerService';
 import { generateId } from './utils/generateId';
 
@@ -548,82 +549,85 @@ const App: React.FC = () => {
         />
       )}
 
-      <Canvas
-        shadows
-        camera={{ fov: 75, near: 0.1, far: 1000 }}
-      >
-        <Suspense fallback={null}>
-          <fog attach="fog" args={['#050505', 50, 200]} />
-          <ambientLight intensity={0.1 + (settings.brightness * 0.5)} />
-          <hemisphereLight args={['#ffffff', '#444444', 0.1 + (settings.brightness * 0.3)]} />
-          <directionalLight
-            position={[50, 50, 25]}
-            intensity={0.8 + settings.brightness}
-            castShadow
-            shadow-mapSize={[2048, 2048]}
-          />
-          <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+      {/* Hide Canvas completely during MULTIPLAYER_LOBBY */}
+      {gameState !== GameState.MULTIPLAYER_LOBBY && (
+        <Canvas
+          shadows
+          camera={{ fov: 75, near: 0.1, far: 1000 }}
+        >
+          <Suspense fallback={null}>
+            <fog attach="fog" args={['#050505', 50, 200]} />
+            <ambientLight intensity={0.1 + (settings.brightness * 0.5)} />
+            <hemisphereLight args={['#ffffff', '#444444', 0.1 + (settings.brightness * 0.3)]} />
+            <directionalLight
+              position={[50, 50, 25]}
+              intensity={0.8 + settings.brightness}
+              castShadow
+              shadow-mapSize={[2048, 2048]}
+            />
+            <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
 
-          <group key={gameKey}>
-            {gameState !== GameState.MENU && !isGenerating && (
-              <>
-                {gameState !== GameState.TUTORIAL && <Rocket stats={stats} />}
+            <group key={gameKey}>
+              {gameState !== GameState.MENU && !isGenerating && (
+                <>
+                  {gameState !== GameState.TUTORIAL && <Rocket stats={stats} />}
 
-                <DamageFeedback events={damageEvents} onRemove={(id) => setDamageEvents(p => p.filter(e => e.id !== id))} />
+                  <DamageFeedback events={damageEvents} onRemove={(id) => setDamageEvents(p => p.filter(e => e.id !== id))} />
 
-                <Player
-                  currentStats={stats}
-                  onStatsUpdate={handleStatsUpdate}
-                  onDie={handleDie}
-                  onShoot={handleShoot}
-                  onInteract={handleInteract}
-                  onToggleEquip={toggleEquip}
-                  onHover={setIsHovering}
-                  isEquipped={isEquipped}
-                  isDead={gameState === GameState.DEAD}
-                  initialPosition={stats.position}
-                  sensitivity={settings.sensitivity}
-                  isTutorial={gameState === GameState.TUTORIAL}
-                />
-
-                {gameState !== GameState.TUTORIAL && (
-                  <MeteorSystem
-                    playerPos={stats.position}
-                    onMeteorHit={() => handleDie("Meteor Impact")}
-                    onRegisterMeteors={setActiveMeteors}
-                    difficultyLevel={settings.difficulty === Difficulty.SEVERE ? 4 : settings.difficulty === Difficulty.HARD ? 3 : settings.difficulty === Difficulty.MEDIUM ? 2 : 1}
+                  <Player
+                    currentStats={stats}
+                    onStatsUpdate={handleStatsUpdate}
+                    onDie={handleDie}
+                    onShoot={handleShoot}
+                    onInteract={handleInteract}
+                    onToggleEquip={toggleEquip}
+                    onHover={setIsHovering}
+                    isEquipped={isEquipped}
+                    isDead={gameState === GameState.DEAD}
+                    initialPosition={stats.position}
+                    sensitivity={settings.sensitivity}
+                    isTutorial={gameState === GameState.TUTORIAL}
                   />
-                )}
 
-                <CollectiblesManager
-                  playerPos={stats.position}
-                  collectibles={collectibles}
-                  onCollect={() => { }}
-                />
+                  {gameState !== GameState.TUTORIAL && (
+                    <MeteorSystem
+                      playerPos={stats.position}
+                      onMeteorHit={() => handleDie("Meteor Impact")}
+                      onRegisterMeteors={setActiveMeteors}
+                      difficultyLevel={settings.difficulty === Difficulty.SEVERE ? 4 : settings.difficulty === Difficulty.HARD ? 3 : settings.difficulty === Difficulty.MEDIUM ? 2 : 1}
+                    />
+                  )}
 
-                <EnemiesManager
-                  playerPos={stats.position}
-                  enemies={enemies}
-                  cacti={cacti}
-                  onPlayerHit={handlePlayerDamage}
-                  setEnemies={setEnemies}
-                  isTutorial={gameState === GameState.TUTORIAL}
-                />
-              </>
-            )}
+                  <CollectiblesManager
+                    playerPos={stats.position}
+                    collectibles={collectibles}
+                    onCollect={() => { }}
+                  />
 
-            {/* Swappable Environment */}
-            {gameState === GameState.TUTORIAL ? (
-              <TrainingFloor />
-            ) : (
-              <TerrainManager playerPosition={{ x: stats.position.x, z: stats.position.z }} />
-            )}
+                  <EnemiesManager
+                    playerPos={stats.position}
+                    enemies={enemies}
+                    cacti={cacti}
+                    onPlayerHit={handlePlayerDamage}
+                    setEnemies={setEnemies}
+                    isTutorial={gameState === GameState.TUTORIAL}
+                  />
+                </>
+              )}
 
-          </group>
-        </Suspense>
-      </Canvas>
+              {/* Swappable Environment */}
+              {gameState === GameState.TUTORIAL ? (
+                <TrainingFloor />
+              ) : (
+                <TerrainManager playerPosition={{ x: stats.position.x, z: stats.position.z }} />
+              )}
 
-      {(gameState === GameState.PLAYING || gameState === GameState.DEAD || gameState === GameState.PAUSED) && !isGenerating && (
+            </group>
+          </Suspense>
+        </Canvas>
+      )}
+
+      {(gameState === GameState.PLAYING || gameState === GameState.DEAD || gameState === GameState.PAUSED || gameState === GameState.MULTIPLAYER_PLAYING) && !isGenerating && (
         <HUD
           stats={stats}
           meteors={activeMeteors}
@@ -655,6 +659,9 @@ const App: React.FC = () => {
           onReturnToMenu={handleReturnToMenu}
         />
       )}
+
+      {/* === PING INDICATOR (Multiplayer) === */}
+      {gameState === GameState.MULTIPLAYER_PLAYING && <PingIndicator />}
     </div>
   );
 };

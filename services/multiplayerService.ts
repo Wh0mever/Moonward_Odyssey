@@ -7,19 +7,42 @@ export interface RemotePlayer {
     rotation: number;
     health: number;
     isHost: boolean;
+    isReady: boolean;
+    slot: number;
+}
+
+export interface ChatMessage {
+    id: string;
+    username: string;
+    text: string;
+    timestamp: number;
+}
+
+export interface LobbyInfo {
+    id: string;
+    name: string;
+    playerCount: number;
+    maxPlayers: number;
+    gameState: string;
+    hostUsername: string;
 }
 
 export interface LobbyState {
     lobbyId: string | null;
+    lobbyName: string | null;
     players: RemotePlayer[];
+    chat: ChatMessage[];
     isHost: boolean;
-    gameStarted: boolean;
+    gameState: 'idle' | 'waiting' | 'loading' | 'playing';
     isConnected: boolean;
     isInQueue: boolean;
+    ping: number;
 }
 
 type LobbyCallback = (state: LobbyState) => void;
 type PlayersCallback = (players: RemotePlayer[]) => void;
+type ChatCallback = (message: ChatMessage) => void;
+type LobbyListCallback = (lobbies: LobbyInfo[]) => void;
 type EnemiesCallback = (enemies: any[]) => void;
 type CollectiblesCallback = (collectibles: any[]) => void;
 type ItemCallback = (itemId: string) => void;
@@ -30,20 +53,27 @@ class MultiplayerService {
     private username: string = '';
     private lobbyState: LobbyState = {
         lobbyId: null,
+        lobbyName: null,
         players: [],
+        chat: [],
         isHost: false,
-        gameStarted: false,
+        gameState: 'idle',
         isConnected: false,
-        isInQueue: false
+        isInQueue: false,
+        ping: 0
     };
 
+    private pingInterval: NodeJS.Timeout | null = null;
     private lobbyCallbacks: LobbyCallback[] = [];
     private playerUpdateCallbacks: PlayersCallback[] = [];
+    private chatCallbacks: ChatCallback[] = [];
+    private lobbyListCallbacks: LobbyListCallback[] = [];
     private enemyCallbacks: EnemiesCallback[] = [];
     private collectibleCallbacks: CollectiblesCallback[] = [];
     private itemRemovedCallbacks: ItemCallback[] = [];
     private enemyDiedCallbacks: ItemCallback[] = [];
     private gameStartCallbacks: (() => void)[] = [];
+    private gameLoadingCallbacks: (() => void)[] = [];
 
     setServerUrl(url: string) {
         this.serverUrl = url;
@@ -65,15 +95,25 @@ class MultiplayerService {
             this.socket.on('connect', () => {
                 console.log('Connected to multiplayer server');
                 this.lobbyState.isConnected = true;
+                this.startPingTracking();
                 this.notifyLobbyChange();
                 resolve(true);
             });
 
             this.socket.on('disconnect', () => {
                 console.log('Disconnected from multiplayer server');
-                this.lobbyState.isConnected = false;
-                this.lobbyState.lobbyId = null;
-                this.lobbyState.players = [];
+                this.stopPingTracking();
+                this.lobbyState = {
+                    lobbyId: null,
+                    lobbyName: null,
+                    players: [],
+                    chat: [],
+                    isHost: false,
+                    gameState: 'idle',
+                    isConnected: false,
+                    isInQueue: false,
+                    ping: 0
+                };
                 this.notifyLobbyChange();
             });
 
@@ -84,6 +124,27 @@ class MultiplayerService {
 
             this.setupEventHandlers();
         });
+    }
+
+    private startPingTracking() {
+        this.pingInterval = setInterval(() => {
+            if (!this.socket) return;
+
+            const start = Date.now();
+            this.socket.emit('ping', (serverTime: number) => {
+                const ping = Date.now() - start;
+                this.lobbyState.ping = ping;
+                this.socket?.emit('reportPing', ping);
+                this.notifyLobbyChange();
+            });
+        }, 2000);
+    }
+
+    private stopPingTracking() {
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
     }
 
     private setupEventHandlers() {
@@ -111,24 +172,61 @@ class MultiplayerService {
             }
         });
 
+        this.socket.on('playerReady', (data: { id: string; isReady: boolean }) => {
+            const player = this.lobbyState.players.find(p => p.id === data.id);
+            if (player) {
+                player.isReady = data.isReady;
+                this.notifyLobbyChange();
+            }
+        });
+
         this.socket.on('newHost', (hostId: string) => {
             this.lobbyState.players.forEach(p => p.isHost = p.id === hostId);
             this.lobbyState.isHost = this.socket?.id === hostId;
             this.notifyLobbyChange();
         });
 
-        this.socket.on('gameStarted', () => {
-            this.lobbyState.gameStarted = true;
+        this.socket.on('chatMessage', (message: ChatMessage) => {
+            this.lobbyState.chat.push(message);
+            if (this.lobbyState.chat.length > 100) {
+                this.lobbyState.chat.shift();
+            }
+            this.chatCallbacks.forEach(cb => cb(message));
             this.notifyLobbyChange();
-            this.gameStartCallbacks.forEach(cb => cb());
         });
 
-        this.socket.on('matchFound', (data: { lobbyId: string; players: RemotePlayer[] }) => {
-            this.lobbyState.lobbyId = data.lobbyId;
+        this.socket.on('gameLoading', () => {
+            console.log('[MP Client] >>> gameLoading event received');
+            this.lobbyState.gameState = 'loading';
+            this.notifyLobbyChange();
+            this.gameLoadingCallbacks.forEach(cb => cb());
+        });
+
+        this.socket.on('gameStarted', () => {
+            console.log('[MP Client] >>> gameStarted event received! Transitioning to playing...');
+            this.lobbyState.gameState = 'playing';
+            this.notifyLobbyChange();
+            this.gameStartCallbacks.forEach(cb => cb());
+            console.log('[MP Client] gameStarted callbacks executed:', this.gameStartCallbacks.length);
+        });
+
+        this.socket.on('matchFound', (data: { id: string; name: string; players: RemotePlayer[] }) => {
+            console.log('[MP Client] >>> matchFound event received!', data);
+            console.log('[MP Client] Match lobby:', data.name, 'Players:', data.players.map(p => p.username).join(', '));
+            this.lobbyState.lobbyId = data.id;
+            this.lobbyState.lobbyName = data.name;
             this.lobbyState.players = data.players;
             this.lobbyState.isInQueue = false;
+            this.lobbyState.gameState = 'loading';
             this.lobbyState.isHost = data.players.find(p => p.id === this.socket?.id)?.isHost || false;
+            console.log('[MP Client] Updated lobbyState.gameState to:', this.lobbyState.gameState);
             this.notifyLobbyChange();
+            this.gameLoadingCallbacks.forEach(cb => cb());
+            console.log('[MP Client] matchFound processing complete');
+        });
+
+        this.socket.on('lobbyListUpdated', () => {
+            this.refreshLobbies();
         });
 
         this.socket.on('enemyUpdate', (enemies: any[]) => {
@@ -149,15 +247,19 @@ class MultiplayerService {
     }
 
     disconnect() {
+        this.stopPingTracking();
         this.socket?.disconnect();
         this.socket = null;
         this.lobbyState = {
             lobbyId: null,
+            lobbyName: null,
             players: [],
+            chat: [],
             isHost: false,
-            gameStarted: false,
+            gameState: 'idle',
             isConnected: false,
-            isInQueue: false
+            isInQueue: false,
+            ping: 0
         };
     }
 
@@ -168,28 +270,55 @@ class MultiplayerService {
             this.socket!.emit('register', username, (result: { success: boolean; error?: string }) => {
                 if (result.success) {
                     this.username = username;
+                    // Save to localStorage
+                    localStorage.setItem('moonward_username', username);
                 }
                 resolve(result);
             });
         });
     }
 
-    async createLobby(): Promise<{ success: boolean; lobbyId?: string; error?: string }> {
+    getSavedUsername(): string | null {
+        return localStorage.getItem('moonward_username');
+    }
+
+    async getLobbies(): Promise<LobbyInfo[]> {
+        if (!this.socket) return [];
+
+        return new Promise((resolve) => {
+            this.socket!.emit('getLobbies', (lobbies: LobbyInfo[]) => {
+                resolve(lobbies);
+            });
+        });
+    }
+
+    private refreshLobbies() {
+        this.getLobbies().then(lobbies => {
+            this.lobbyListCallbacks.forEach(cb => cb(lobbies));
+        });
+    }
+
+    async createLobby(): Promise<{ success: boolean; lobbyId?: string; lobbyName?: string; error?: string }> {
         if (!this.socket) return { success: false, error: 'Not connected' };
 
         return new Promise((resolve) => {
-            this.socket!.emit('createLobby', (result: { success: boolean; lobbyId?: string; error?: string }) => {
+            this.socket!.emit('createLobby', (result: { success: boolean; lobbyId?: string; lobbyName?: string; error?: string }) => {
                 if (result.success && result.lobbyId) {
                     this.lobbyState.lobbyId = result.lobbyId;
+                    this.lobbyState.lobbyName = result.lobbyName || 'Lobby';
                     this.lobbyState.isHost = true;
+                    this.lobbyState.gameState = 'waiting';
                     this.lobbyState.players = [{
                         id: this.socket!.id!,
                         username: this.username,
                         position: [0, 2, 0],
                         rotation: 0,
                         health: 100,
-                        isHost: true
+                        isHost: true,
+                        isReady: true,
+                        slot: 1
                     }];
+                    this.lobbyState.chat = [];
                     this.notifyLobbyChange();
                 }
                 resolve(result);
@@ -201,11 +330,14 @@ class MultiplayerService {
         if (!this.socket) return { success: false, error: 'Not connected' };
 
         return new Promise((resolve) => {
-            this.socket!.emit('joinLobby', lobbyId, (result: { success: boolean; players?: RemotePlayer[]; error?: string }) => {
-                if (result.success && result.players) {
-                    this.lobbyState.lobbyId = lobbyId;
-                    this.lobbyState.players = result.players;
+            this.socket!.emit('joinLobby', lobbyId, (result: { success: boolean; lobby?: any; error?: string }) => {
+                if (result.success && result.lobby) {
+                    this.lobbyState.lobbyId = result.lobby.id;
+                    this.lobbyState.lobbyName = result.lobby.name;
+                    this.lobbyState.players = result.lobby.players;
+                    this.lobbyState.chat = result.lobby.chat || [];
                     this.lobbyState.isHost = false;
+                    this.lobbyState.gameState = 'waiting';
                     this.notifyLobbyChange();
                 }
                 resolve(result);
@@ -213,14 +345,22 @@ class MultiplayerService {
         });
     }
 
-    async quickMatch(): Promise<{ success: boolean; waiting?: boolean; lobbyId?: string }> {
-        if (!this.socket) return { success: false };
+    async quickMatch(): Promise<{ success: boolean; status?: string }> {
+        if (!this.socket) {
+            console.log('[MP Client] quickMatch failed - not connected');
+            return { success: false };
+        }
 
+        console.log('[MP Client] quickMatch called, emitting to server...');
         return new Promise((resolve) => {
-            this.socket!.emit('quickMatch', (result: { success: boolean; waiting?: boolean; lobbyId?: string }) => {
-                if (result.waiting) {
+            this.socket!.emit('quickMatch', (result: { success: boolean; status?: string }) => {
+                console.log('[MP Client] quickMatch callback received:', result);
+                if (result.status === 'searching') {
+                    console.log('[MP Client] Added to matchmaking queue, waiting for match...');
                     this.lobbyState.isInQueue = true;
                     this.notifyLobbyChange();
+                } else if (result.status === 'matched') {
+                    console.log('[MP Client] Matched immediately! Waiting for matchFound event...');
                 }
                 resolve(result);
             });
@@ -231,6 +371,15 @@ class MultiplayerService {
         this.socket?.emit('cancelMatch');
         this.lobbyState.isInQueue = false;
         this.notifyLobbyChange();
+    }
+
+    sendChat(text: string) {
+        if (!this.socket || !text.trim()) return;
+        this.socket.emit('sendChat', text.trim());
+    }
+
+    toggleReady() {
+        this.socket?.emit('toggleReady');
     }
 
     async startGame(): Promise<{ success: boolean; error?: string }> {
@@ -267,9 +416,11 @@ class MultiplayerService {
     leaveLobby() {
         this.socket?.emit('leaveLobby');
         this.lobbyState.lobbyId = null;
+        this.lobbyState.lobbyName = null;
         this.lobbyState.players = [];
+        this.lobbyState.chat = [];
         this.lobbyState.isHost = false;
-        this.lobbyState.gameStarted = false;
+        this.lobbyState.gameState = 'idle';
         this.notifyLobbyChange();
     }
 
@@ -285,6 +436,20 @@ class MultiplayerService {
         this.playerUpdateCallbacks.push(callback);
         return () => {
             this.playerUpdateCallbacks = this.playerUpdateCallbacks.filter(cb => cb !== callback);
+        };
+    }
+
+    onChatMessage(callback: ChatCallback) {
+        this.chatCallbacks.push(callback);
+        return () => {
+            this.chatCallbacks = this.chatCallbacks.filter(cb => cb !== callback);
+        };
+    }
+
+    onLobbyListUpdate(callback: LobbyListCallback) {
+        this.lobbyListCallbacks.push(callback);
+        return () => {
+            this.lobbyListCallbacks = this.lobbyListCallbacks.filter(cb => cb !== callback);
         };
     }
 
@@ -323,6 +488,13 @@ class MultiplayerService {
         };
     }
 
+    onGameLoading(callback: () => void) {
+        this.gameLoadingCallbacks.push(callback);
+        return () => {
+            this.gameLoadingCallbacks = this.gameLoadingCallbacks.filter(cb => cb !== callback);
+        };
+    }
+
     private notifyLobbyChange() {
         this.lobbyCallbacks.forEach(cb => cb({ ...this.lobbyState }));
     }
@@ -341,6 +513,10 @@ class MultiplayerService {
 
     getSocketId(): string | undefined {
         return this.socket?.id;
+    }
+
+    getPing(): number {
+        return this.lobbyState.ping;
     }
 }
 
