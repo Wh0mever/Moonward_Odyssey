@@ -6,8 +6,10 @@
 export enum GameState {
   MENU,
   PLAYING,
+  PAUSED,
   DEAD,
-  TUTORIAL
+  TUTORIAL,
+  VICTORY
 }
 
 export enum Difficulty {
@@ -50,8 +52,8 @@ export interface Meteor {
   velocity: [number, number, number];
   radius: number;
   state: MeteorState;
-  impactTime: number; 
-  targetPos: {x: number, z: number};
+  impactTime: number;
+  targetPos: { x: number, z: number };
 }
 
 export enum CollectibleType {

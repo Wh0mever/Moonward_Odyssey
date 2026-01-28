@@ -1,10 +1,9 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
-*/
-import React, { useRef, useEffect, useMemo } from 'react';
-import { useFrame } from '@react-three/fiber';
+ */
+import React, { useRef, useEffect, useState } from 'react';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 
 interface WeaponProps {
@@ -15,117 +14,167 @@ interface WeaponProps {
 
 export const Weapon: React.FC<WeaponProps> = ({ isShooting, isEquipped, laserTarget }) => {
   const groupRef = useRef<THREE.Group>(null);
+  const { camera } = useThree();
   const recoilOffset = useRef(0);
-  const flashOpacity = useRef(0);
-  const equipOffset = useRef(1.0); // 0 = equipped, 1 = unequipped (lowered)
+  const [showFlash, setShowFlash] = useState(false);
+  const [showLaser, setShowLaser] = useState(false);
+  const equipOffset = useRef(isEquipped ? 0 : 1.0);
 
   useEffect(() => {
     if (isShooting && isEquipped) {
-      recoilOffset.current = 0.2;
-      flashOpacity.current = 1.0;
+      recoilOffset.current = 0.08;
+      setShowFlash(true);
+      setShowLaser(true);
+      setTimeout(() => setShowFlash(false), 60);
+      setTimeout(() => setShowLaser(false), 200);
     }
   }, [isShooting, isEquipped]);
 
   useFrame((state, delta) => {
-    // Recoil recovery
-    recoilOffset.current = THREE.MathUtils.lerp(recoilOffset.current, 0, delta * 15);
-    flashOpacity.current = THREE.MathUtils.lerp(flashOpacity.current, 0, delta * 25);
+    if (!groupRef.current) return;
 
-    // Equip Animation
-    const targetEquip = isEquipped ? 0 : 1.0;
+    // Animate recoil recovery
+    recoilOffset.current = THREE.MathUtils.lerp(recoilOffset.current, 0, delta * 10);
+
+    // Animate equip/unequip
+    const targetEquip = isEquipped ? 0 : 0.5;
     equipOffset.current = THREE.MathUtils.lerp(equipOffset.current, targetEquip, delta * 8);
 
-    if (groupRef.current) {
-      // VISIBILITY FIX:
-      // X: 0.3 (Right side)
-      // Y: -0.25 (Standard height) minus equip offset (slides down when unequipped)
-      // Z: -0.5 (In front of camera, but not too far to get clipped)
-      groupRef.current.position.set(0.3, -0.25 - (equipOffset.current * 0.6), -0.5 + recoilOffset.current);
-      
-      // Rotation: Slight inward aim for natural feel
-      groupRef.current.rotation.set(
-          (recoilOffset.current * 0.5) + (equipOffset.current * 0.5), 
-          0.05, 
-          0
-      );
-    }
+    // Get camera's world position and direction
+    const cameraPos = camera.position.clone();
+    const cameraDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    const cameraRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+
+    // Position weapon in front of camera
+    const weaponPos = cameraPos.clone()
+      .add(cameraRight.multiplyScalar(0.35))
+      .add(cameraUp.multiplyScalar(-0.25 - equipOffset.current * 0.3))
+      .add(cameraDir.multiplyScalar(0.6 + recoilOffset.current));
+
+    groupRef.current.position.copy(weaponPos);
+    groupRef.current.quaternion.copy(camera.quaternion);
+    groupRef.current.rotateX(equipOffset.current * 0.4);
   });
 
-  // Laser Beam Visual
-  const laserElement = useMemo(() => {
-     return (
-        <mesh position={[0, 0.05, -25]} rotation={[Math.PI/2, 0, 0]}>
-            <cylinderGeometry args={[0.005, 0.005, 50]} />
-            <meshBasicMaterial color="cyan" transparent opacity={0.6} />
-        </mesh>
-     );
-  }, []);
-
   return (
-    <group ref={groupRef} scale={1.5}> {/* SCALED UP 1.5x for visibility */}
-      {/* Internal Lighting to ensure weapon is always lit */}
-      <pointLight position={[0, 0.5, 0]} intensity={3} distance={2} color="#ffffff" />
-      <ambientLight intensity={2} />
+    <group ref={groupRef}>
+      {/* Bright dedicated light */}
+      <pointLight position={[0, 0.1, 0]} intensity={10} distance={3} color="#ffffff" />
 
-      {isShooting && laserElement}
+      {/* === SPACESUIT ARMS - BRIGHT WHITE/GRAY FOR VISIBILITY === */}
 
-      {/* --- M4A4 MODEL --- */}
+      {/* RIGHT ARM - Main holding arm */}
+      <group position={[0.08, -0.1, 0.08]}>
+        {/* Upper Arm - WHITE */}
+        <mesh rotation={[0.5, 0, -0.2]}>
+          <boxGeometry args={[0.06, 0.18, 0.06]} />
+          <meshBasicMaterial color="#ffffff" />
+        </mesh>
+        {/* Elbow Joint - GRAY */}
+        <mesh position={[0.02, -0.1, -0.04]}>
+          <sphereGeometry args={[0.04]} />
+          <meshBasicMaterial color="#aaaaaa" />
+        </mesh>
+        {/* Forearm - LIGHT GRAY */}
+        <mesh position={[0.03, -0.14, -0.08]} rotation={[0.7, 0, 0]}>
+          <boxGeometry args={[0.05, 0.15, 0.05]} />
+          <meshBasicMaterial color="#cccccc" />
+        </mesh>
+        {/* Glove - ORANGE for visibility */}
+        <mesh position={[0.04, -0.22, -0.14]}>
+          <boxGeometry args={[0.07, 0.05, 0.06]} />
+          <meshBasicMaterial color="#ff6600" />
+        </mesh>
+      </group>
 
-      {/* Main Receiver */}
-      <mesh position={[0, 0, -0.1]}>
-        <boxGeometry args={[0.08, 0.12, 0.4]} />
-        <meshStandardMaterial color="#555" roughness={0.3} metalness={0.6} />
+      {/* LEFT ARM - Supporting arm */}
+      <group position={[-0.1, -0.08, -0.08]}>
+        {/* Upper Arm - WHITE */}
+        <mesh rotation={[0.4, 0, 0.25]}>
+          <boxGeometry args={[0.055, 0.15, 0.055]} />
+          <meshBasicMaterial color="#ffffff" />
+        </mesh>
+        {/* Elbow Joint */}
+        <mesh position={[-0.03, -0.08, -0.03]}>
+          <sphereGeometry args={[0.035]} />
+          <meshBasicMaterial color="#aaaaaa" />
+        </mesh>
+        {/* Forearm - LIGHT GRAY */}
+        <mesh position={[-0.05, -0.12, -0.06]} rotation={[0.5, 0, 0.15]}>
+          <boxGeometry args={[0.045, 0.12, 0.045]} />
+          <meshBasicMaterial color="#cccccc" />
+        </mesh>
+        {/* Glove - ORANGE */}
+        <mesh position={[-0.07, -0.18, -0.1]}>
+          <boxGeometry args={[0.06, 0.045, 0.055]} />
+          <meshBasicMaterial color="#ff6600" />
+        </mesh>
+      </group>
+
+      {/* === WEAPON === */}
+
+      {/* LASER BEAM */}
+      {showLaser && (
+        <mesh position={[0, 0.02, -3]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.006, 0.006, 6]} />
+          <meshBasicMaterial color="#00ffff" transparent opacity={0.85} />
+        </mesh>
+      )}
+
+      {/* MUZZLE FLASH */}
+      {showFlash && (
+        <mesh position={[0, 0.02, -0.25]}>
+          <sphereGeometry args={[0.05]} />
+          <meshBasicMaterial color="#ffff44" />
+        </mesh>
+      )}
+
+      {/* Main Body - Dark gun metal */}
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[0.035, 0.055, 0.18]} />
+        <meshBasicMaterial color="#2a2a2a" />
       </mesh>
-      
+
       {/* Stock */}
-      <mesh position={[0, -0.05, 0.25]}>
-         <boxGeometry args={[0.06, 0.15, 0.3]} />
-         <meshStandardMaterial color="#222" roughness={0.8} />
+      <mesh position={[0, -0.015, 0.1]}>
+        <boxGeometry args={[0.028, 0.07, 0.12]} />
+        <meshBasicMaterial color="#1a1a1a" />
       </mesh>
 
-      {/* Pistol Grip */}
-      <mesh position={[0, -0.15, 0.0]} rotation={[0.2, 0, 0]}>
-        <boxGeometry args={[0.05, 0.2, 0.08]} />
-        <meshStandardMaterial color="#111" />
+      {/* Grip */}
+      <mesh position={[0, -0.055, 0.02]} rotation={[0.2, 0, 0]}>
+        <boxGeometry args={[0.025, 0.08, 0.035]} />
+        <meshBasicMaterial color="#111111" />
       </mesh>
-      
-      {/* Handguard / Rails */}
-      <mesh position={[0, 0, -0.4]}>
-          <boxGeometry args={[0.06, 0.08, 0.4]} />
-          <meshStandardMaterial color="#333" />
+
+      {/* Handguard */}
+      <mesh position={[0, 0, -0.12]}>
+        <boxGeometry args={[0.03, 0.04, 0.15]} />
+        <meshBasicMaterial color="#222222" />
       </mesh>
 
       {/* Barrel */}
-      <mesh position={[0, 0.02, -0.65]} rotation={[Math.PI/2, 0, 0]}>
-        <cylinderGeometry args={[0.015, 0.015, 0.15]} />
-        <meshStandardMaterial color="#111" metalness={0.8} />
+      <mesh position={[0, 0.012, -0.22]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.008, 0.008, 0.06]} />
+        <meshBasicMaterial color="#111111" />
       </mesh>
 
       {/* Magazine */}
-      <mesh position={[0, -0.2, -0.1]} rotation={[0.1, 0, 0]}>
-        <boxGeometry args={[0.055, 0.25, 0.12]} />
-        <meshStandardMaterial color="#222" />
+      <mesh position={[0, -0.075, -0.02]} rotation={[0.08, 0, 0]}>
+        <boxGeometry args={[0.028, 0.11, 0.05]} />
+        <meshBasicMaterial color="#1f1f1f" />
       </mesh>
 
-      {/* Optical Sight */}
-      <mesh position={[0, 0.08, -0.1]}>
-        <boxGeometry args={[0.06, 0.06, 0.1]} />
-        <meshStandardMaterial color="#222" />
+      {/* Sight */}
+      <mesh position={[0, 0.042, 0]}>
+        <boxGeometry args={[0.028, 0.025, 0.04]} />
+        <meshBasicMaterial color="#151515" />
       </mesh>
-      <mesh position={[0, 0.08, -0.15]}>
-        <planeGeometry args={[0.04, 0.04]} />
-        <meshBasicMaterial color="#00ff00" transparent opacity={0.8} />
-      </mesh>
-
-      {/* Muzzle Flash */}
-      <mesh position={[0, 0.02, -0.75]}>
-        <planeGeometry args={[0.4, 0.4]} />
-        <meshBasicMaterial 
-          color="#fff7cc" 
-          transparent 
-          opacity={flashOpacity.current} 
-          side={THREE.DoubleSide}
-        />
+      {/* Red Dot */}
+      <mesh position={[0, 0.042, -0.025]}>
+        <circleGeometry args={[0.006]} />
+        <meshBasicMaterial color="#ff0000" side={THREE.DoubleSide} />
       </mesh>
     </group>
   );
